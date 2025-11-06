@@ -31,7 +31,7 @@ export class CreateTaskDto {
 
   @IsNumber()
   @Min(1)
-  estimated_duration_minutes: number;
+  estimatedDurationMinutes: number;
 
   @IsArray()
   @IsString({ each: true })
