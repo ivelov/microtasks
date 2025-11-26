@@ -26,7 +26,7 @@ export class Task {
   @Column()
   title: string;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'text', nullable: true })
   description: string;
 
   @Column({ type: 'decimal' })
