@@ -9,7 +9,6 @@ import { TaskQueryDto } from './dto/taskQuery.dto';
 
 @Injectable()
 export class TasksService {
-  // In a real app:
   constructor(
     @InjectRepository(Task)
     private tasksRepository: Repository<Task>,
@@ -24,10 +23,20 @@ export class TasksService {
     userId: string,
   ): Promise<Task> {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
-    const skills = await this.skillsRepository.findBy({
-      id: In(createTaskDto.requiredSkillIds),
-    });
     if (!user) throw new HttpException('User not found', 404);
+
+    const skills = await this.skillsRepository.findBy({
+      title: In(createTaskDto.requiredSkills),
+    });
+    const newSkillTitles = createTaskDto.requiredSkills.filter(
+      (title) => !skills.find((skill) => skill.title === title),
+    );
+
+    for (const title of newSkillTitles) {
+      const newSkill = this.skillsRepository.create({ title });
+      await this.skillsRepository.save(newSkill);
+      skills.push(newSkill);
+    }
 
     const task = this.tasksRepository.create({
       ...createTaskDto,

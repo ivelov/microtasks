@@ -22,10 +22,10 @@ export class PathfindingService {
    * Main entry point for the Genetic Algorithm
    * Finds the optimal path for a user to complete a list of tasks.
    */
-  async findOptimalPath(dto: OptimizePathDto): Promise<Task[]> {
+  async findOptimalPath(dto: OptimizePathDto, userId: string): Promise<Task[]> {
     // 1. Get User and validate skills
     const user = await this.usersRepository.findOne({
-      where: { id: dto.userId },
+      where: { id: userId },
     });
     if (!user) {
       throw new HttpException('User not found', HttpStatus.NOT_FOUND);

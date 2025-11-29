@@ -35,5 +35,5 @@ export class CreateTaskDto {
 
   @IsArray()
   @IsString({ each: true })
-  requiredSkillIds: string[];
+  requiredSkills: string[];
 }
