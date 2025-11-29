@@ -24,7 +24,8 @@
     "migration:run": "npm run build && npm run typeorm migration:run",
     "migration:run:prod": "npm run typeorm migration:run",
     "migration:revert": "npm run build && npm run typeorm migration:revert",
-    "debug:config": "ts-node -r tsconfig-paths/register src/config/typeorm.config-migrations.ts"
+    "debug:config": "ts-node -r tsconfig-paths/register src/config/typeorm.config-migrations.ts",
+    "seed": "ts-node -r tsconfig-paths/register src/seed.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
