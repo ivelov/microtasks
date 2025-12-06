@@ -52,8 +52,30 @@ export class TasksService {
     return this.tasksRepository.find();
   }
 
-  public async findNearby(query: TaskQueryDto): Promise<Task[]> {
-    const allTasks = await this.tasksRepository.find();
+  public async findNearby(
+    query: TaskQueryDto,
+    userId?: string,
+  ): Promise<Task[]> {
+    let allTasks = await this.tasksRepository.find({
+      relations: ['requiredSkills'],
+    });
+    if (!allTasks || allTasks.length === 0) {
+      return [];
+    }
+    if (!query.ignoreUserSkills && userId) {
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+        relations: ['skills'],
+      });
+      if (user) {
+        const userSkillIds = user.skills?.map((s) => s.id) || [];
+        // Filter tasks by user's skills
+        const eligibleTasks = allTasks.filter((task) =>
+          task.requiredSkills.every((skill) => userSkillIds.includes(skill.id)),
+        );
+        allTasks = eligibleTasks;
+      }
+    }
 
     // In a real app, you'd do this with a PostGIS query for efficiency
     return allTasks.filter((task) => {

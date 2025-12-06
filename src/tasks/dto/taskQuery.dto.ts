@@ -1,5 +1,5 @@
-import { Type } from 'class-transformer';
-import { IsNumber, Max, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsNumber, Max, Min } from 'class-validator';
 
 export class TaskQueryDto {
   @IsNumber()
@@ -18,4 +18,8 @@ export class TaskQueryDto {
   @Type(() => Number)
   @Min(1)
   radius: number;
+
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  ignoreUserSkills?: boolean;
 }

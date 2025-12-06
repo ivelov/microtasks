@@ -14,4 +14,12 @@ export class OptimizePathDto {
   @Min(-180)
   @Max(180)
   startLongitude: number;
+
+  @IsNumber()
+  @Min(1)
+  maxTimeMinutes: number;
+
+  @IsNumber()
+  @Min(1)
+  movementSpeed: number;
 }

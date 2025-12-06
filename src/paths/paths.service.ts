@@ -23,44 +23,53 @@ export class PathfindingService {
    * Finds the optimal path for a user to complete a list of tasks.
    */
   async findOptimalPath(dto: OptimizePathDto, userId: string): Promise<Task[]> {
-    // 1. Get User and validate skills
-    const user = await this.usersRepository.findOne({
-      where: { id: userId },
-    });
-    if (!user) {
-      throw new HttpException('User not found', HttpStatus.NOT_FOUND);
-    }
-    const userSkillIds = user.skills?.map((s) => s.id) || [];
+    // 1. Fetch User & Tasks (Same as before)
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new HttpException('User not found', HttpStatus.NOT_FOUND);
 
-    // 2. Get all requested tasks from DB
     const tasks = await this.tasksRepository.find({
-      where: {
-        id: In(dto.taskIds),
-        status: TaskStatus.OPEN,
-      },
-      relations: ['requiredSkills'],
+      where: { id: In(dto.taskIds), status: TaskStatus.OPEN },
     });
+    if (tasks.length === 0) return [];
 
-    // 3. Filter tasks by user's skills
-    const eligibleTasks = tasks.filter((task) =>
-      task.requiredSkills.every((skill) => userSkillIds.includes(skill.id)),
-    );
-
-    if (eligibleTasks.length === 0) {
-      return [];
-    }
-
-    // 4. Run the Genetic Algorithm
     const startPoint: LocationPoint = {
       latitude: dto.startLatitude,
       longitude: dto.startLongitude,
     };
 
-    // The "genes" for our algorithm are the eligible tasks
-    const genes: Task[] = eligibleTasks;
+    // 2. Pre-calculate Distances (Critical for performance)
+    const distanceMatrix = this.buildDistanceMatrix(startPoint, tasks);
 
-    const population = this.createInitialPopulation(genes, 50);
-    const bestPath = this.runGA(population, startPoint, 100, 0.1, 0.8);
+    // 3. Calculate Total Possible Reward (The "Perfect Score")
+    // We use this to calculate how much reward we "missed" later
+    const maxPossibleReward = tasks.reduce(
+      (sum, t) => sum + (t.reward || 1),
+      0,
+    );
+
+    // 4. Run GA
+    const populationSize = 100;
+    const generations = 250;
+
+    // Smart Initialization (Optional but recommended)
+    // We seed the population with random paths AND one "Greedy" path (highest value/time ratio)
+    const population = this.createInitialPopulation(
+      tasks,
+      startPoint,
+      populationSize,
+      distanceMatrix,
+    );
+
+    const bestPath = this.runGA(
+      population,
+      distanceMatrix,
+      dto.maxTimeMinutes,
+      dto.movementSpeed,
+      generations,
+      0.05, // Mutation
+      0.8, // Crossover
+      maxPossibleReward, // Pass the total reward cap
+    );
 
     return bestPath;
   }
@@ -69,88 +78,93 @@ export class PathfindingService {
    * Runs the main GA loop
    * @param population - Initial population
    * @param startPoint - The user's starting location
+   * @param maxTimeMinutes - Maximum time available for completing tasks
+   * @param movementSpeed - Movement speed in km/h
    * @param generations - How many generations to run
    * @param mutationRate - Chance of mutation
    * @param crossoverRate - Chance of crossover
    */
   private runGA(
     population: Population,
-    startPoint: LocationPoint,
+    distanceMatrix: Map<string, number>,
+    maxTimeMinutes: number,
+    movementSpeed: number,
     generations: number,
     mutationRate: number,
     crossoverRate: number,
+    maxPossibleReward: number,
   ): Chromosome {
     let currentPopulation = population;
 
     for (let i = 0; i < generations; i++) {
-      // 1. Calculate fitness for each individual
+      // Calculate Fitness
       const fitnessScores = currentPopulation.map((chromo) => ({
         path: chromo,
-        fitness: this.calculateFitness(chromo, startPoint),
+        fitness: this.calculateFitness(
+          chromo,
+          distanceMatrix,
+          maxTimeMinutes,
+          movementSpeed,
+          maxPossibleReward,
+        ),
       }));
 
-      // Sort by fitness (lower is better)
+      // Sort: Lower fitness is better
       fitnessScores.sort((a, b) => a.fitness - b.fitness);
 
       const newPopulation: Population = [];
 
-      // Elitism: Keep the best one
+      // Elitism: Keep the top 2 absolute best paths found so far
       newPopulation.push(fitnessScores[0].path);
+      newPopulation.push(fitnessScores[1].path);
 
-      // 2. Selection, Crossover, Mutation
+      // Generate rest
       while (newPopulation.length < currentPopulation.length) {
         const parent1 = this.selection(fitnessScores);
         const parent2 = this.selection(fitnessScores);
 
         let child = parent1;
-        if (Math.random() < crossoverRate) {
+        if (Math.random() < crossoverRate)
           child = this.crossover(parent1, parent2);
-        }
+        if (Math.random() < mutationRate) child = this.mutate(child);
 
-        if (Math.random() < mutationRate) {
-          child = this.mutate(child);
-        }
         newPopulation.push(child);
       }
       currentPopulation = newPopulation;
     }
 
-    // Return the best path from the final generation
-    const finalFitnessScores = currentPopulation.map((chromo) => ({
+    // Final result processing
+    const finalScores = currentPopulation.map((chromo) => ({
       path: chromo,
-      fitness: this.calculateFitness(chromo, startPoint),
+      fitness: this.calculateFitness(
+        chromo,
+        distanceMatrix,
+        maxTimeMinutes,
+        movementSpeed,
+        maxPossibleReward,
+      ),
     }));
-    finalFitnessScores.sort((a, b) => a.fitness - b.fitness);
+    finalScores.sort((a, b) => a.fitness - b.fitness);
 
-    return finalFitnessScores[0].path;
+    return this.decodePath(
+      finalScores[0].path,
+      distanceMatrix,
+      maxTimeMinutes,
+      movementSpeed,
+    );
   }
 
   /**
-   * Creates an initial population of random paths
+   * Filters a path to only include tasks that fit within the time limit
    */
-  private createInitialPopulation(
-    genes: Task[],
-    populationSize: number,
-  ): Population {
-    const population: Population = [];
-    for (let i = 0; i < populationSize; i++) {
-      // Create a new random path (chromosome) by shuffling the tasks
-      const newPath = [...genes].sort(() => Math.random() - 0.5);
-      population.push(newPath);
-    }
-    return population;
-  }
-
-  /**
-   * Fitness function: Calculates the total cost of a path.
-   * A lower score is better.
-   * Cost = Total Travel Time + Total Task Duration
-   */
-  private calculateFitness(
+  private filterPathByTimeLimit(
     path: Chromosome,
     startPoint: LocationPoint,
-  ): number {
-    let totalCost = 0;
+    maxTimeMinutes: number,
+    movementSpeed: number,
+  ): Chromosome {
+    const filteredPath: Chromosome = [];
+    let totalTime = 0;
     let currentPoint = startPoint;
 
     for (const task of path) {
@@ -161,17 +175,158 @@ export class PathfindingService {
         task.longitude,
       );
 
-      // Assuming average travel speed of 15 km/h (walking/city travel)
-      // This is a major simplification!
-      const travelTimeMinutes = (travelDistance / 15) * 60;
+      const travelTimeMinutes = (travelDistance / movementSpeed) * 60;
+      const timeWithThisTask =
+        totalTime + travelTimeMinutes + task.estimatedDurationMinutes;
 
-      totalCost += travelTimeMinutes;
-      totalCost += task.estimatedDurationMinutes;
+      if (timeWithThisTask > maxTimeMinutes) {
+        break;
+      }
 
-      // Update current location for next leg
+      filteredPath.push(task);
+      totalTime = timeWithThisTask;
       currentPoint = task;
     }
-    return totalCost;
+
+    return filteredPath;
+  }
+
+  /**
+   * Creates an initial population of random paths
+   */
+  private createInitialPopulation(
+    allTasks: Task[],
+    startPoint: LocationPoint, // We need start point now
+    populationSize: number,
+    distanceMatrix: Map<string, number>,
+  ): Population {
+    const population: Population = [];
+    // const geneIds = allTasks.map((t) => t.id);
+
+    // 1. STRATEGY A: "High Density" (Reward / Distance)
+    // Prioritizes tasks that are close AND valuable.
+    // This specifically fixes your problem.
+    const densityPath = this.generateHeuristicPath(
+      allTasks,
+      startPoint,
+      distanceMatrix,
+      (task, currentPos, dist) => {
+        const reward = task.reward || 1;
+        // Avoid division by zero. If dist is 0, treat as 0.1
+        const safeDist = dist < 0.1 ? 0.1 : dist;
+        // The higher the score, the more likely we pick it
+        return reward / safeDist;
+      },
+    );
+    population.push(densityPath);
+
+    // 2. STRATEGY B: "Nearest Neighbor"
+    // Just goes to the closest task next. Great for finding clusters of medium tasks.
+    const nearestPath = this.generateHeuristicPath(
+      allTasks,
+      startPoint,
+      distanceMatrix,
+      (task, currentPos, dist) => {
+        // Inverse of distance (closer = higher score)
+        return 1 / (dist + 0.01);
+      },
+    );
+    population.push(nearestPath);
+
+    // 3. STRATEGY C: "Pure Greed" (Reward only)
+    // What you likely had before (High Reward, ignoring distance)
+    const greedyPath = [...allTasks].sort(
+      (a, b) => (b.reward || 0) - (a.reward || 0),
+    );
+    population.push(greedyPath);
+
+    // 4. Fill the rest with Random (for genetic diversity)
+    while (population.length < populationSize) {
+      const randomPath = [...allTasks].sort(() => Math.random() - 0.5);
+      population.push(randomPath);
+    }
+
+    return population;
+  }
+
+  private generateHeuristicPath(
+    tasks: Task[],
+    startPoint: LocationPoint,
+    distanceMatrix: Map<string, number>,
+    scoreFn: (task: Task, currentId: string, dist: number) => number,
+  ): Task[] {
+    const remainingTasks = new Set(tasks);
+    const path: Task[] = [];
+    let currentId = 'START'; // Corresponds to key in distanceMatrix
+
+    while (remainingTasks.size > 0) {
+      let bestTask: Task | null = null;
+      let bestScore = -Infinity;
+
+      for (const task of remainingTasks) {
+        const dist = distanceMatrix.get(`${currentId}-${task.id}`) || 10000;
+        const score = scoreFn(task, currentId, dist);
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestTask = task;
+        }
+      }
+
+      if (bestTask) {
+        path.push(bestTask);
+        remainingTasks.delete(bestTask);
+        currentId = bestTask.id;
+      } else {
+        break;
+      }
+    }
+    return path;
+  }
+
+  /**
+   * Fitness function: Calculates the total cost of a path.
+   * A lower score is better.
+   * Cost = Total Travel Time + Total Task Duration
+   * If path exceeds maxTimeMinutes, adds heavy penalty
+   */
+  private calculateFitness(
+    path: Chromosome,
+    distanceMatrix: Map<string, number>,
+    maxTimeMinutes: number,
+    movementSpeed: number,
+    maxPossibleReward: number,
+  ): number {
+    let currentTime = 0;
+    let collectedReward = 0;
+    let lastId = 'START';
+
+    for (const task of path) {
+      const distKm = distanceMatrix.get(`${lastId}-${task.id}`) || 0;
+      const travelTime = (distKm / movementSpeed) * 60;
+      const nextTime = currentTime + travelTime + task.estimatedDurationMinutes;
+
+      // If we can fit this task in the day, take the reward
+      if (nextTime <= maxTimeMinutes) {
+        currentTime = nextTime;
+        collectedReward += task.reward || 1; // <--- Accumulate Value
+        lastId = task.id;
+      } else {
+        // Stop counting once we run out of time
+        break;
+      }
+    }
+
+    // Weighting Logic:
+    // We want High Reward first, Low Time second.
+    // Penalty = (Money we left on the table) * HugeFactor
+    const uncollectedReward = maxPossibleReward - collectedReward;
+
+    // The Factor must be larger than the max possible time (minutes)
+    // so that saving 1 min never outweighs gaining 1 reward point.
+    const rewardPriorityFactor = 10000;
+
+    return uncollectedReward * rewardPriorityFactor + currentTime;
   }
 
   /**
@@ -199,45 +354,105 @@ export class PathfindingService {
    * (Using simple Ordered Crossover)
    */
   private crossover(parent1: Chromosome, parent2: Chromosome): Chromosome {
-    const start = Math.floor(Math.random() * parent1.length);
-    const end = Math.floor(Math.random() * (parent1.length - start) + start);
+    const len = parent1.length;
+    const start = Math.floor(Math.random() * len);
+    const end = Math.floor(Math.random() * (len - start) + start);
 
-    const child: Chromosome = new Array(parent1.length).fill(null);
+    const child: Chromosome = new Array(len).fill(null);
+    // Create a Set for O(1) lookups of what is already in the child
+    const childSet = new Set<string>();
 
-    // Copy segment from parent1
+    // Copy segment
     for (let i = start; i <= end; i++) {
       child[i] = parent1[i];
+      childSet.add(parent1[i].id);
     }
 
-    // Fill remaining spots from parent2
-    let parent2Index = 0;
-    for (let i = 0; i < child.length; i++) {
+    // Fill remaining
+    let p2Index = 0;
+    for (let i = 0; i < len; i++) {
       if (child[i] === null) {
-        while (child.includes(parent2[parent2Index])) {
-          parent2Index++;
+        while (childSet.has(parent2[p2Index].id)) {
+          p2Index++;
         }
-        child[i] = parent2[parent2Index];
+        child[i] = parent2[p2Index];
+        childSet.add(parent2[p2Index].id);
       }
     }
     return child;
   }
 
-  /**
-   * Randomly alters a path.
-   * (Using simple Swap Mutation)
-   */
   private mutate(path: Chromosome): Chromosome {
-    const i = Math.floor(Math.random() * path.length);
-    let j = Math.floor(Math.random() * path.length);
-    // Ensure j is different from i
-    while (i === j) {
-      j = Math.floor(Math.random() * path.length);
-    }
-
-    // Swap two tasks in the path
     const newPath = [...path];
-    [newPath[i], newPath[j]] = [newPath[j], newPath[i]];
+    const i = Math.floor(Math.random() * newPath.length);
+    let j = Math.floor(Math.random() * newPath.length);
+    while (i === j) j = Math.floor(Math.random() * newPath.length);
 
+    [newPath[i], newPath[j]] = [newPath[j], newPath[i]];
     return newPath;
+  }
+
+  private buildDistanceMatrix(
+    start: LocationPoint,
+    tasks: Task[],
+  ): Map<string, number> {
+    const matrix = new Map<string, number>();
+
+    // Helper to store key
+    const setDist = (id1: string, id2: string, dist: number) => {
+      matrix.set(`${id1}-${id2}`, dist);
+    };
+
+    // 1. Distance from Start to every Task
+    tasks.forEach((task) => {
+      const dist = this.tasksService.haversineDistance(
+        start.latitude,
+        start.longitude,
+        task.latitude,
+        task.longitude,
+      );
+      setDist('START', task.id, dist);
+    });
+
+    // 2. Distance between every Task pair
+    for (let i = 0; i < tasks.length; i++) {
+      for (let j = 0; j < tasks.length; j++) {
+        if (i === j) continue;
+        const dist = this.tasksService.haversineDistance(
+          tasks[i].latitude,
+          tasks[i].longitude,
+          tasks[j].latitude,
+          tasks[j].longitude,
+        );
+        setDist(tasks[i].id, tasks[j].id, dist);
+      }
+    }
+    return matrix;
+  }
+
+  private decodePath(
+    path: Chromosome,
+    distanceMatrix: Map<string, number>,
+    maxTimeMinutes: number,
+    movementSpeed: number,
+  ): Task[] {
+    const result: Task[] = [];
+    let currentTime = 0;
+    let lastId = 'START';
+
+    for (const task of path) {
+      const distKm = distanceMatrix.get(`${lastId}-${task.id}`) || 0;
+      const travelTime = (distKm / movementSpeed) * 60;
+      const nextTime = currentTime + travelTime + task.estimatedDurationMinutes;
+
+      if (nextTime <= maxTimeMinutes) {
+        result.push(task);
+        currentTime = nextTime;
+        lastId = task.id;
+      } else {
+        break;
+      }
+    }
+    return result;
   }
 }
