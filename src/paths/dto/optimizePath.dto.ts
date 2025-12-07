@@ -15,7 +15,11 @@ export class OptimizePathDto {
   @Max(180)
   startLongitude: number;
 
-  // In a real app, we'd get the user from the AuthGuard
-  @IsUUID()
-  userId: string;
+  @IsNumber()
+  @Min(1)
+  maxTimeMinutes: number;
+
+  @IsNumber()
+  @Min(1)
+  movementSpeed: number;
 }

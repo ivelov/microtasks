@@ -20,4 +20,7 @@ export class User {
   @ManyToMany(() => Skill)
   @JoinTable()
   skills: Skill[];
+
+  @Column({ nullable: true })
+  password: string;
 }

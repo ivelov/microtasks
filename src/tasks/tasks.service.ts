@@ -9,7 +9,6 @@ import { TaskQueryDto } from './dto/taskQuery.dto';
 
 @Injectable()
 export class TasksService {
-  // In a real app:
   constructor(
     @InjectRepository(Task)
     private tasksRepository: Repository<Task>,
@@ -24,10 +23,20 @@ export class TasksService {
     userId: string,
   ): Promise<Task> {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
-    const skills = await this.skillsRepository.findBy({
-      id: In(createTaskDto.requiredSkillIds),
-    });
     if (!user) throw new HttpException('User not found', 404);
+
+    const skills = await this.skillsRepository.findBy({
+      title: In(createTaskDto.requiredSkills),
+    });
+    const newSkillTitles = createTaskDto.requiredSkills.filter(
+      (title) => !skills.find((skill) => skill.title === title),
+    );
+
+    for (const title of newSkillTitles) {
+      const newSkill = this.skillsRepository.create({ title });
+      await this.skillsRepository.save(newSkill);
+      skills.push(newSkill);
+    }
 
     const task = this.tasksRepository.create({
       ...createTaskDto,
@@ -43,8 +52,30 @@ export class TasksService {
     return this.tasksRepository.find();
   }
 
-  public async findNearby(query: TaskQueryDto): Promise<Task[]> {
-    const allTasks = await this.tasksRepository.find();
+  public async findNearby(
+    query: TaskQueryDto,
+    userId?: string,
+  ): Promise<Task[]> {
+    let allTasks = await this.tasksRepository.find({
+      relations: ['requiredSkills'],
+    });
+    if (!allTasks || allTasks.length === 0) {
+      return [];
+    }
+    if (!query.ignoreUserSkills && userId) {
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+        relations: ['skills'],
+      });
+      if (user) {
+        const userSkillIds = user.skills?.map((s) => s.id) || [];
+        // Filter tasks by user's skills
+        const eligibleTasks = allTasks.filter((task) =>
+          task.requiredSkills.every((skill) => userSkillIds.includes(skill.id)),
+        );
+        allTasks = eligibleTasks;
+      }
+    }
 
     // In a real app, you'd do this with a PostGIS query for efficiency
     return allTasks.filter((task) => {
