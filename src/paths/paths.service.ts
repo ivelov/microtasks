@@ -9,7 +9,6 @@ import { TasksService } from 'src/tasks/tasks.service';
 
 @Injectable()
 export class PathfindingService {
-  // In a real app, inject Task and User repositories
   constructor(
     @InjectRepository(Task)
     private tasksRepository: Repository<Task>,
@@ -23,7 +22,6 @@ export class PathfindingService {
    * Finds the optimal path for a user to complete a list of tasks.
    */
   async findOptimalPath(dto: OptimizePathDto, userId: string): Promise<Task[]> {
-    // 1. Fetch User & Tasks (Same as before)
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (!user) throw new HttpException('User not found', HttpStatus.NOT_FOUND);
 
@@ -37,7 +35,6 @@ export class PathfindingService {
       longitude: dto.startLongitude,
     };
 
-    // 2. Pre-calculate Distances (Critical for performance)
     const distanceMatrix = this.buildDistanceMatrix(startPoint, tasks);
 
     // 3. Calculate Total Possible Reward (The "Perfect Score")
@@ -68,7 +65,7 @@ export class PathfindingService {
       generations,
       0.05, // Mutation
       0.8, // Crossover
-      maxPossibleReward, // Pass the total reward cap
+      maxPossibleReward,
     );
 
     return bestPath;
@@ -205,7 +202,6 @@ export class PathfindingService {
 
     // 1. STRATEGY A: "High Density" (Reward / Distance)
     // Prioritizes tasks that are close AND valuable.
-    // This specifically fixes your problem.
     const densityPath = this.generateHeuristicPath(
       allTasks,
       startPoint,
@@ -234,7 +230,6 @@ export class PathfindingService {
     population.push(nearestPath);
 
     // 3. STRATEGY C: "Pure Greed" (Reward only)
-    // What you likely had before (High Reward, ignoring distance)
     const greedyPath = [...allTasks].sort(
       (a, b) => (b.reward || 0) - (a.reward || 0),
     );
